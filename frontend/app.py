@@ -11,7 +11,7 @@ st.set_page_config(
 )
 
 # Constants
-API_URL = "http://localhost:8000"
+API_URL = "https://personal-productivity-agent-7vd6.onrender.com"
 
 # Initialize session state
 if "token" not in st.session_state:
