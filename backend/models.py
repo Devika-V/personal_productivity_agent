@@ -15,12 +15,14 @@ class Task(Base):
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id"))
     description = Column(String)
-    category = Column(String)  # work/personal/health/learning
-    priority = Column(String)  # high/medium/low
+    category = Column(String, default="work")  # work/personal/health/learning
+    priority = Column(String, default="medium")  # high/medium/low
     due_date = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     is_overdue = Column(Boolean, default=False)
+    estimated_minutes = Column(Integer, default=30)  # For focus timer
+    actual_minutes = Column(Integer, default=0)  # Actual time spent
 
 class DailyLog(Base):
     __tablename__ = "daily_logs"
@@ -43,7 +45,28 @@ class UserStreak(Base):
     __tablename__ = "user_streaks"
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id"))
-    current_streak = Column(Integer, default=0, nullable=False)  # ✅ Added nullable=False
-    longest_streak = Column(Integer, default=0, nullable=False)  # ✅ Added nullable=False
+    current_streak = Column(Integer, default=0)
+    longest_streak = Column(Integer, default=0)
     last_checkin_date = Column(DateTime, nullable=True)
-    total_checkins = Column(Integer, default=0, nullable=False)  # ✅ Added nullable=False
+    total_checkins = Column(Integer, default=0)
+
+class FocusSession(Base):
+    __tablename__ = "focus_sessions"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"))
+    task_id = Column(Integer, ForeignKey("tasks.id"))
+    start_time = Column(DateTime, default=datetime.utcnow)
+    end_time = Column(DateTime, nullable=True)
+    duration_minutes = Column(Integer, default=0)
+    completed = Column(Boolean, default=False)
+
+class Habit(Base):
+    __tablename__ = "habits"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"))
+    name = Column(String)
+    frequency = Column(String, default="daily")  # daily, weekly
+    current_streak = Column(Integer, default=0)
+    longest_streak = Column(Integer, default=0)
+    last_check_date = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)

@@ -20,6 +20,8 @@ if "user_id" not in st.session_state:
     st.session_state.user_id = None
 if "tasks" not in st.session_state:
     st.session_state.tasks = []
+if "focus_session" not in st.session_state:
+    st.session_state.focus_session = None
 
 # ==================== AUTH FUNCTIONS ====================
 
@@ -39,7 +41,7 @@ def login():
             if response.status_code == 200:
                 data = response.json()
                 st.session_state.token = data["access_token"]
-                st.session_state.user_id = 1  # For demo - you'd decode JWT
+                st.session_state.user_id = 1
                 st.success("Login successful!")
                 st.rerun()
             else:
@@ -110,7 +112,15 @@ def main():
     
     view = st.sidebar.radio(
         "Choose View",
-        ["🌅 Morning Check-in", "🌇 Evening Check-in", "📋 My Tasks", "📅 This Week", "📊 Profile"]
+        [
+            "🌅 Morning Check-in",
+            "🌇 Evening Check-in",
+            "📋 My Tasks",
+            "⏱️ Focus Timer",
+            "🔥 Habits",
+            "📊 Insights",
+            "📊 Profile"
+        ]
     )
     
     st.sidebar.markdown("---")
@@ -128,8 +138,12 @@ def main():
         evening_checkin()
     elif view == "📋 My Tasks":
         show_tasks()
-    elif view == "📅 This Week":
-        show_week()
+    elif view == "⏱️ Focus Timer":
+        show_focus_timer()
+    elif view == "🔥 Habits":
+        show_habits()
+    elif view == "📊 Insights":
+        show_insights()
     elif view == "📊 Profile":
         show_profile()
 
@@ -205,27 +219,17 @@ def morning_checkin():
             height=150
         )
         
-        col1, col2 = st.columns(2)
-        with col1:
-            submitted = st.form_submit_button("💾 Save Plan", use_container_width=True)
-        with col2:
-            # Calendar import button
-            if st.form_submit_button("📅 Import Calendar", use_container_width=True):
-                response = requests.post(
-                    f"{API_URL}/calendar/import",
-                    headers={"Authorization": f"Bearer {st.session_state.token}"}
-                )
-                if response.status_code == 200:
-                    st.success(response.json()["message"])
-                else:
-                    st.error("Failed to import calendar")
+        submitted = st.form_submit_button("💾 Save Plan", use_container_width=True)
         
         if submitted and tasks_text:
             tasks = [t.strip() for t in tasks_text.split("\n") if t.strip()]
             
             response = requests.post(
                 f"{API_URL}/checkin/morning",
-                headers={"Authorization": f"Bearer {st.session_state.token}"},
+                headers={
+                    "Authorization": f"Bearer {st.session_state.token}",
+                    "Content-Type": "application/json"
+                },
                 json={"tasks": tasks}
             )
             
@@ -245,6 +249,7 @@ def morning_checkin():
                 st.error("Failed to save tasks")
 
 # ==================== EVENING CHECK-IN ====================
+
 def evening_checkin():
     st.header("🌇 Evening Check-in")
     st.markdown("---")
@@ -270,92 +275,78 @@ def evening_checkin():
     
     if not incomplete_tasks:
         st.success("🎉 All tasks completed! Great job!")
-        return
-    
-    st.subheader(f"📋 {len(incomplete_tasks)} tasks remaining")
-    
-    with st.form("evening_form"):
-        completed_ids = []
+    else:
+        st.subheader(f"📋 {len(incomplete_tasks)} tasks remaining")
         
-        for task in incomplete_tasks:
-            col1, col2, col3 = st.columns([1, 4, 1])
-            with col1:
-                checked = st.checkbox(
-                    "Complete",
-                    key=f"task_{task['id']}",
-                    label_visibility="collapsed"
-                )
-            with col2:
-                urgency_emoji = "🔴" if task.get("priority") == "high" else "🟡" if task.get("priority") == "medium" else "🟢"
-                st.write(f"{urgency_emoji} {task['description']}")
-            with col3:
-                st.caption(f"📂 {task.get('category', 'work')}")
+        with st.form("evening_form"):
+            completed_ids = []
             
-            if checked:
-                completed_ids.append(task['id'])
-        
-        notes = st.text_area(
-            "Any notes?",
-            placeholder="Had to pivot to urgent client request...",
-            height=100
-        )
-        
-        submitted = st.form_submit_button("✅ Complete Evening Check-in", use_container_width=True)
-        
-        if submitted:
-            if not completed_ids:
-                st.warning("Please select at least one task to complete")
-            else:
-                # =============================================
-                # 🔍 DEBUG CODE STARTS HERE
-                # =============================================
-                st.write("🔍 Debug - Task IDs:", completed_ids)
-                st.write("🔍 Debug - Notes:", notes)
-                # =============================================
+            for task in incomplete_tasks:
+                col1, col2, col3 = st.columns([1, 4, 1])
+                with col1:
+                    checked = st.checkbox(
+                        "Complete",
+                        key=f"task_{task['id']}",
+                        label_visibility="collapsed"
+                    )
+                with col2:
+                    urgency_emoji = "🔴" if task.get("priority") == "high" else "🟡" if task.get("priority") == "medium" else "🟢"
+                    st.write(f"{urgency_emoji} {task['description']}")
+                with col3:
+                    st.caption(f"📂 {task.get('category', 'work')}")
                 
-                response = requests.post(
-                    f"{API_URL}/checkin/evening",
-                    headers={
-                        "Authorization": f"Bearer {st.session_state.token}",
-                        "Content-Type": "application/json"
-                    },
-                    params={"notes": notes},
-                    json=completed_ids
-                )
-                
-                # =============================================
-                # 🔍 DEBUG CODE CONTINUES
-                # =============================================
-                st.write("🔍 Debug - Status Code:", response.status_code)
-                st.write("🔍 Debug - Response Text:", response.text)
-                # =============================================
-                
-                if response.status_code == 200:
-                    data = response.json()
-                    st.success(f"✅ Completed {data['completed']} tasks!")
-                    
-                    # Run EOD
-                    eod_response = requests.post(
-                        f"{API_URL}/eod/run",
-                        headers={"Authorization": f"Bearer {st.session_state.token}"}
+                if checked:
+                    completed_ids.append(task['id'])
+            
+            notes = st.text_area(
+                "Any notes?",
+                placeholder="Had to pivot to urgent client request...",
+                height=100
+            )
+            
+            submitted = st.form_submit_button("✅ Complete Evening Check-in", use_container_width=True)
+            
+            if submitted:
+                if not completed_ids:
+                    st.warning("Please select at least one task to complete")
+                else:
+                    response = requests.post(
+                        f"{API_URL}/checkin/evening",
+                        headers={
+                            "Authorization": f"Bearer {st.session_state.token}",
+                            "Content-Type": "application/json"
+                        },
+                        params={"notes": notes},
+                        json=completed_ids
                     )
                     
-                    if eod_response.status_code == 200:
-                        data = eod_response.json()
-                        st.subheader("📄 EOD Summary")
-                        st.write(data.get("summary", "No summary generated"))
+                    if response.status_code == 200:
+                        data = response.json()
+                        st.success(f"✅ Completed {data['completed']} tasks!")
                         
-                        st.subheader("📅 Tomorrow's Plan")
-                        st.write(data.get("tomorrow_plan", "No plan generated"))
+                        # Run EOD
+                        eod_response = requests.post(
+                            f"{API_URL}/eod/run",
+                            headers={"Authorization": f"Bearer {st.session_state.token}"}
+                        )
                         
-                        if data.get("overdue"):
-                            st.warning(f"⚠️ {len(data['overdue'])} overdue tasks detected!")
+                        if eod_response.status_code == 200:
+                            data = eod_response.json()
+                            st.subheader("📄 EOD Summary")
+                            st.write(data.get("summary", "No summary generated"))
+                            
+                            st.subheader("📅 Tomorrow's Plan")
+                            st.write(data.get("tomorrow_plan", "No plan generated"))
+                            
+                            if data.get("overdue"):
+                                st.warning(f"⚠️ {len(data['overdue'])} overdue tasks detected!")
+                        else:
+                            st.error("Failed to generate EOD summary")
+                        
+                        st.rerun()
                     else:
-                        st.error("Failed to generate EOD summary")
-                    
-                    st.rerun()
-                else:
-                    st.error(f"Failed to save evening check-in: {response.status_code}")
+                        st.error(f"Failed to save evening check-in: {response.status_code}")
+
 # ==================== TASKS VIEW ====================
 
 def show_tasks():
@@ -412,35 +403,182 @@ def show_tasks():
             else:
                 st.caption("⏳ Pending")
 
-# ==================== THIS WEEK VIEW ====================
+# ==================== FOCUS TIMER ====================
 
-def show_week():
-    st.header("📅 This Week")
+def show_focus_timer():
+    st.header("⏱️ Focus Timer")
     st.markdown("---")
     
-    # Get last 7 days
-    today = datetime.now()
+    # Get today's tasks
+    response = requests.get(
+        f"{API_URL}/tasks/today",
+        headers={"Authorization": f"Bearer {st.session_state.token}"}
+    )
     
-    for i in range(6, -1, -1):
-        date = today - timedelta(days=i)
-        date_str = date.strftime("%A, %B %d")
+    if response.status_code != 200:
+        st.error("Failed to load tasks")
+        return
+    
+    tasks = response.json().get("tasks", [])
+    incomplete = [t for t in tasks if not t.get("completed")]
+    
+    # Show focus session if active
+    if st.session_state.focus_session:
+        st.subheader("🎯 Current Focus Session")
+        st.info(f"📌 Task: **{st.session_state.focus_session.get('task', 'Unknown')}**")
+        st.info(f"⏱️ Duration: **{st.session_state.focus_session.get('duration', 25)} minutes**")
+        st.warning("⏳ Timer is running! Focus on your task.")
         
-        with st.expander(f"📆 {date_str}"):
-            # Get tasks for this date
-            st.write("Loading tasks for this day...")
-            st.caption("(This feature would show tasks and summaries for each day)")
+        # ✅ End Session button - NOW BELOW the info
+        if st.button("⏹️ End Session", use_container_width=True):
+            session_id = st.session_state.focus_session.get("session_id")
+            response = requests.post(
+                f"{API_URL}/focus/end/{session_id}",
+                headers={"Authorization": f"Bearer {st.session_state.token}"}
+            )
+            if response.status_code == 200:
+                data = response.json()
+                st.success(data["message"])
+                st.balloons()
+                st.session_state.focus_session = None
+                st.rerun()
+            else:
+                st.error("Failed to end session")
+        
+        st.markdown("---")
+    
+    # Show task selection (only if no active session)
+    else:
+        if incomplete:
+            task_options = {f"{t['description']}": t['id'] for t in incomplete}
+            selected = st.selectbox("🎯 Select task to focus on:", list(task_options.keys()))
+            task_id = task_options[selected]
             
-            # In a full implementation, you'd query tasks by date
-            # For now, show a placeholder
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Tasks Planned", "0")
-            with col2:
-                st.metric("Completed", "0")
-            with col3:
-                st.metric("Pending", "0")
+            duration = st.slider("⏱️ Focus duration (minutes):", 5, 60, 25)
+            
+            if st.button("▶️ Start Focus Session", use_container_width=True):
+                response = requests.post(
+                    f"{API_URL}/focus/start/{task_id}",
+                    headers={"Authorization": f"Bearer {st.session_state.token}"},
+                    params={"duration": duration}
+                )
+                if response.status_code == 200:
+                    data = response.json()
+                    st.success(data["message"])
+                    st.session_state.focus_session = data
+                    st.rerun()
+                else:
+                    st.error("Failed to start focus session")
+        else:
+            st.info("No incomplete tasks. Complete your morning check-in first!")
+    
+    st.markdown("---")
+    
+    # Show focus stats
+    st.subheader("📊 Your Focus Stats")
+    stats = requests.get(
+        f"{API_URL}/focus/stats",
+        headers={"Authorization": f"Bearer {st.session_state.token}"}
+    )
+    
+    if stats.status_code == 200:
+        data = stats.json()
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Today's Focus", f"{data['today_minutes']} min")
+        with col2:
+            st.metric("This Week", f"{data['week_minutes']} min")
+        with col3:
+            st.metric("Best Task", data.get('best_task', 'None')[:15] if data.get('best_task') else 'None')
+# ==================== HABITS ====================
 
-# ==================== PROFILE VIEW ====================
+def show_habits():
+    st.header("🔥 Habit Tracker")
+    st.markdown("---")
+    
+    # Create new habit
+    with st.expander("➕ Create New Habit"):
+        with st.form("habit_form"):
+            habit_name = st.text_input("Habit name:", placeholder="Gym, Reading, Meditation...")
+            frequency = st.selectbox("Frequency:", ["daily", "weekly"])
+            
+            if st.form_submit_button("Create Habit"):
+                response = requests.post(
+                    f"{API_URL}/habits/create",
+                    headers={"Authorization": f"Bearer {st.session_state.token}"},
+                    params={"name": habit_name, "frequency": frequency}
+                )
+                if response.status_code == 200:
+                    st.success(response.json()["message"])
+                    st.rerun()
+                else:
+                    st.error("Failed to create habit")
+    
+    # List habits
+    response = requests.get(
+        f"{API_URL}/habits/list",
+        headers={"Authorization": f"Bearer {st.session_state.token}"}
+    )
+    
+    if response.status_code == 200:
+        habits = response.json().get("habits", [])
+        
+        if not habits:
+            st.info("No habits yet. Create your first habit above!")
+            return
+        
+        for habit in habits:
+            col1, col2, col3 = st.columns([3, 1, 1])
+            with col1:
+                st.write(f"**{habit['name']}**")
+            with col2:
+                st.write(f"🔥 {habit['current_streak']} days")
+            with col3:
+                if st.button("✅ Check-in", key=f"habit_{habit['id']}"):
+                    response = requests.post(
+                        f"{API_URL}/habits/check/{habit['id']}",
+                        headers={"Authorization": f"Bearer {st.session_state.token}"}
+                    )
+                    if response.status_code == 200:
+                        data = response.json()
+                        st.success(data["message"])
+                        st.rerun()
+                    else:
+                        st.error("Failed to check in")
+
+# ==================== INSIGHTS ====================
+
+def show_insights():
+    st.header("📊 AI-Powered Insights")
+    st.markdown("---")
+    
+    if st.button("🔄 Generate Weekly Insights", use_container_width=True):
+        with st.spinner("Generating insights..."):
+            response = requests.get(
+                f"{API_URL}/insights/weekly",
+                headers={"Authorization": f"Bearer {st.session_state.token}"}
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Tasks Completed", data["stats"]["tasks_completed"])
+                with col2:
+                    st.metric("Focus Minutes", data["stats"]["total_focus_minutes"])
+                with col3:
+                    st.metric("Active Habits", data["stats"]["active_habits"])
+                
+                st.subheader("📝 Weekly Summary")
+                st.info(data["summary"])
+                
+                st.subheader("📅 Tomorrow's Recommendation")
+                st.success(data["recommendation"])
+            else:
+                st.error("Failed to generate insights")
+
+# ==================== PROFILE ====================
 
 def show_profile():
     st.header("📊 Profile")
@@ -459,10 +597,11 @@ def show_profile():
         "Evening Check-in": "✅",
         "Task Classification": "✅",
         "EOD Summary": "✅",
+        "Focus Timer": "✅ NEW!",
+        "Habit Tracker": "✅ NEW!",
+        "AI Insights": "✅ NEW!",
         "Voice Input": "✅ (Beta)",
-        "Calendar Import": "✅",
-        "Streak Tracking": "✅",
-        "Weekly Review": "✅ (Sundays)"
+        "Streak Tracking": "✅"
     }
     
     for feature, status in features.items():
@@ -472,7 +611,7 @@ def show_profile():
     
     # Stats placeholder
     st.subheader("📈 Your Stats")
-    st.info("More detailed statistics coming soon!")
+    st.info("Keep using the app daily to build streaks and track progress!")
 
 # ==================== RUN APP ====================
 

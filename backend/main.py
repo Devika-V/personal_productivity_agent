@@ -366,16 +366,26 @@ def extract_tasks_from_voice(
     except:
         return {"tasks": [{"description": transcript, "category": "work", "urgency": "medium"}]}
 
+########
+import os
+
 @app.post("/calendar/import")
 def import_calendar(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     try:
-        with open("mock_calendar.json", "r") as f:
+        # ✅ Get the absolute path to the file (project root)
+        file_path = r"C:\Users\devik\OneDrive\Desktop\personal productivity agent\mock_calendar.json"
+
+        print(f"📅 Looking for calendar file at: {file_path}")
+        
+        with open(file_path, "r") as f:
             data = json.load(f)
     except FileNotFoundError:
-        return {"message": "No calendar file found. Create mock_calendar.json", "count": 0}
+        return {"message": f"No calendar file found. Create mock_calendar.json in the project root folder", "count": 0}
+    except json.JSONDecodeError:
+        return {"message": "Invalid JSON in mock_calendar.json. Please check the file format.", "count": 0}
     
     imported = 0
     for event in data.get("events", []):
@@ -392,7 +402,6 @@ def import_calendar(
     
     db.commit()
     return {"message": f"Imported {imported} calendar events", "count": imported}
-
 @app.get("/streak/current")
 def get_streak(
     db: Session = Depends(get_db),
@@ -425,3 +434,296 @@ def get_streak_message(
 @app.get("/health")
 def health_check():
     return {"status": "healthy", "message": "Productivity Agent is running!"}
+
+
+from datetime import datetime, timedelta
+from .models import FocusSession, Habit
+
+# ==================== FOCUS TIMER ENDPOINTS ====================
+
+@app.post("/focus/start/{task_id}")
+def start_focus(
+    task_id: int,
+    duration: int = 25,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Start a focus session for a task"""
+    
+    # Check if task exists
+    task = db.query(Task).filter(
+        Task.id == task_id,
+        Task.user_id == current_user.id
+    ).first()
+    
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    
+    # Create focus session
+    session = FocusSession(
+        user_id=current_user.id,
+        task_id=task_id,
+        start_time=datetime.utcnow(),
+        duration_minutes=duration,
+        completed=False
+    )
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+    
+    return {
+        "message": f"🎯 Focus session started for '{task.description}'",
+        "session_id": session.id,
+        "duration": duration,
+        "task": task.description
+    }
+
+@app.post("/focus/end/{session_id}")
+def end_focus(
+    session_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """End a focus session and log time"""
+    
+    session = db.query(FocusSession).filter(
+        FocusSession.id == session_id,
+        FocusSession.user_id == current_user.id
+    ).first()
+    
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    # Calculate actual time
+    elapsed = datetime.utcnow() - session.start_time
+    actual_minutes = int(elapsed.total_seconds() / 60)
+    
+    session.end_time = datetime.utcnow()
+    session.duration_minutes = actual_minutes
+    session.completed = True
+    
+    # Update task with actual time
+    task = db.query(Task).filter(Task.id == session.task_id).first()
+    if task:
+        task.actual_minutes = actual_minutes
+    
+    db.commit()
+    
+    # Generate motivational message
+    if actual_minutes >= 25:
+        message = "🔥 Amazing focus! You completed a full Pomodoro session!"
+    elif actual_minutes >= 15:
+        message = "💪 Good focus! Keep building that concentration muscle!"
+    else:
+        message = "🌱 Great start! Every minute of focus counts!"
+    
+    return {
+        "message": message,
+        "actual_minutes": actual_minutes,
+        "task_completed": task.completed_at is not None if task else False
+    }
+
+@app.get("/focus/stats")
+def get_focus_stats(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Get focus statistics for the user"""
+    
+    today = datetime.utcnow().date()
+    
+    # Today's focus
+    today_sessions = db.query(FocusSession).filter(
+        FocusSession.user_id == current_user.id,
+        FocusSession.start_time >= today,
+        FocusSession.completed == True
+    ).all()
+    
+    today_minutes = sum([s.duration_minutes for s in today_sessions])
+    
+    # Week's focus
+    week_ago = today - timedelta(days=7)
+    week_sessions = db.query(FocusSession).filter(
+        FocusSession.user_id == current_user.id,
+        FocusSession.start_time >= week_ago,
+        FocusSession.completed == True
+    ).all()
+    
+    week_minutes = sum([s.duration_minutes for s in week_sessions])
+    
+    # Best task
+    best_task = db.query(Task).filter(
+        Task.user_id == current_user.id,
+        Task.actual_minutes.isnot(None)
+    ).order_by(Task.actual_minutes.desc()).first()
+    
+    return {
+        "today_minutes": today_minutes,
+        "today_sessions": len(today_sessions),
+        "week_minutes": week_minutes,
+        "week_sessions": len(week_sessions),
+        "best_task": best_task.description if best_task else None,
+        "best_task_time": best_task.actual_minutes if best_task else 0
+    }
+
+
+# ==================== HABIT TRACKER ENDPOINTS ====================
+
+@app.post("/habits/create")
+def create_habit(
+    name: str,
+    frequency: str = "daily",
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Create a new habit to track"""
+    
+    habit = Habit(
+        user_id=current_user.id,
+        name=name,
+        frequency=frequency,
+        current_streak=0,
+        longest_streak=0
+    )
+    db.add(habit)
+    db.commit()
+    db.refresh(habit)
+    
+    return {"message": f"✅ Habit '{name}' created", "habit_id": habit.id}
+
+@app.post("/habits/check/{habit_id}")
+def check_habit(
+    habit_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Mark a habit as done today"""
+    
+    habit = db.query(Habit).filter(
+        Habit.id == habit_id,
+        Habit.user_id == current_user.id
+    ).first()
+    
+    if not habit:
+        raise HTTPException(status_code=404, detail="Habit not found")
+    
+    today = datetime.utcnow().date()
+    last_check = habit.last_check_date.date() if habit.last_check_date else None
+    
+    if last_check == today:
+        return {"message": "✅ Already checked in today!", "streak": habit.current_streak}
+    
+    habit.current_streak += 1
+    if habit.current_streak > habit.longest_streak:
+        habit.longest_streak = habit.current_streak
+    
+    habit.last_check_date = datetime.utcnow()
+    db.commit()
+    
+    # Streak milestones
+    milestones = {
+        7: "⭐ 7-day streak! You're building a habit!",
+        14: "🔥 14-day streak! This is becoming a lifestyle!",
+        30: "🏆 30-day streak! You're unstoppable!",
+        100: "💎 100-day streak! You're a habit master!"
+    }
+    
+    message = "🔥 Great job! Keep the streak going!"
+    if habit.current_streak in milestones:
+        message = milestones[habit.current_streak]
+    
+    return {
+        "message": message,
+        "current_streak": habit.current_streak,
+        "longest_streak": habit.longest_streak,
+        "total_checkins": habit.current_streak
+    }
+
+@app.get("/habits/list")
+def list_habits(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """List all habits for the user"""
+    
+    habits = db.query(Habit).filter(Habit.user_id == current_user.id).all()
+    
+    return {
+        "habits": [
+            {
+                "id": h.id,
+                "name": h.name,
+                "current_streak": h.current_streak,
+                "longest_streak": h.longest_streak,
+                "last_check": h.last_check_date
+            }
+            for h in habits
+        ]
+    }
+
+
+# ==================== AI-POWERED INSIGHTS (Using LangGraph) ====================
+
+@app.get("/insights/weekly")
+def get_weekly_insights(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Get AI-powered weekly insights using actual data"""
+    
+    # Get last 7 days data
+    week_ago = datetime.utcnow() - timedelta(days=7)
+    
+    tasks = db.query(Task).filter(
+        Task.user_id == current_user.id,
+        Task.created_at >= week_ago
+    ).all()
+    
+    focus_sessions = db.query(FocusSession).filter(
+        FocusSession.user_id == current_user.id,
+        FocusSession.start_time >= week_ago,
+        FocusSession.completed == True
+    ).all()
+    
+    habits = db.query(Habit).filter(Habit.user_id == current_user.id).all()
+    
+    # ✅ FIX: Correctly count completed tasks
+    completed_tasks = [t for t in tasks if t.completed_at is not None]
+    incomplete_tasks = [t for t in tasks if t.completed_at is None]
+    
+    total = len(tasks)
+    completed_count = len(completed_tasks)
+    incomplete_count = len(incomplete_tasks)
+    
+    # ✅ Generate summary based on ACTUAL data
+    if completed_count == total and total > 0:
+        task_names = ", ".join([t.description for t in completed_tasks])
+        summary = f"🎉 AMAZING WEEK! You completed ALL {total} tasks: {task_names}. You're unstoppable!"
+    elif completed_count > 0 and incomplete_count > 0:
+        completed_names = ", ".join([t.description for t in completed_tasks])
+        incomplete_names = ", ".join([t.description for t in incomplete_tasks])
+        summary = f"This week you completed {completed_count} out of {total} tasks. ✅ Done: {completed_names}. ⏳ Pending: {incomplete_names}. Focus on these next week."
+    elif completed_count == 0 and total > 0:
+        task_names = ", ".join([t.description for t in tasks])
+        summary = f"This week you had {total} tasks planned but completed none: {task_names}. Let's make a fresh start next week!"
+    else:
+        summary = f"This week you completed {completed_count} of {total} tasks."
+    
+    # ✅ Generate recommendation based on incomplete tasks
+    if not incomplete_tasks:
+        recommendation = "🎉 All tasks completed! Great job! Plan next week's tasks fresh."
+    else:
+        task_names = "\n- ".join([t.description for t in incomplete_tasks[:5]])
+        if len(incomplete_tasks) > 5:
+            task_names += f"\n- ... and {len(incomplete_tasks) - 5} more"
+        recommendation = f"📋 Carry over these {len(incomplete_tasks)} tasks to next week:\n- {task_names}\n\nStart with the most important one first!"
+    
+    return {
+        "summary": summary,
+        "recommendation": recommendation,
+        "stats": {
+            "tasks_completed": completed_count,
+            "total_focus_minutes": sum([s.duration_minutes for s in focus_sessions]),
+            "active_habits": len([h for h in habits if h.current_streak > 0])
+        }
+    }
