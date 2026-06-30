@@ -1,0 +1,15 @@
+fastapi
+uvicorn
+streamlit
+sqlalchemy
+python-jose[cryptography]
+passlib[bcrypt]
+python-multipart
+groq
+langgraph
+langgraph-checkpoint-sqlite
+apscheduler
+pydantic
+python-dotenv
+requests
+httpx
