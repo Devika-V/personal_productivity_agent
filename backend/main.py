@@ -237,6 +237,15 @@ def run_eod(
     if not tasks:
         return {"message": "No tasks found for today"}
     
+    # ✅ FIX: Get actual overdue tasks
+    overdue_tasks = db.query(Task).filter(
+        Task.user_id == current_user.id,
+        Task.due_date < today,
+        Task.completed_at.is_(None)
+    ).all()
+    
+    overdue = [{"id": t.id, "description": t.description} for t in overdue_tasks]
+    
     # Count completed and incomplete
     completed = [t for t in tasks if t.completed_at is not None]
     incomplete = [t for t in tasks if t.completed_at is None]
@@ -245,7 +254,7 @@ def run_eod(
     completed_count = len(completed)
     incomplete_count = len(incomplete)
     
-    # ✅ Generate summary based on ACTUAL data (NO AGENT, NO LLM)
+    # Generate summary
     if completed_count == total and total > 0:
         task_names = ", ".join([t.description for t in completed])
         summary = f"🎉 AMAZING! You completed ALL {total} tasks today: {task_names}. You're on fire!"
@@ -259,7 +268,7 @@ def run_eod(
     else:
         summary = f"Today you completed {completed_count} of {total} tasks."
     
-    # ✅ Generate tomorrow's plan (NO AGENT, NO LLM)
+    # Generate tomorrow's plan
     if not incomplete:
         tomorrow_plan = "🎉 All tasks completed! Great job! Plan tomorrow's tasks fresh."
     else:
@@ -279,7 +288,7 @@ def run_eod(
     return {
         "summary": summary,
         "tomorrow_plan": tomorrow_plan,
-        "overdue": [],
+        "overdue": overdue,  # ✅ NOW RETURNS REAL OVERDUE
         "_debug": {
             "total_tasks": total,
             "completed": completed_count,
@@ -321,6 +330,10 @@ def get_summary(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
+    # ✅ SECURITY FIX: Only allow users to see their own summary
+    if user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
     summary = db.query(EODSummary).filter(
         EODSummary.user_id == user_id
     ).order_by(EODSummary.date.desc()).first()

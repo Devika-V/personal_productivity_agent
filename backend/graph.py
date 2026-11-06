@@ -115,46 +115,51 @@ class ProductivityAgent:
         
         return state
     
-    def eod_summarizer(self, state: AgentState) -> AgentState:
-        """Generate EOD summary using ACTUAL data from state (NO LLM)"""
-        
-        tasks = state.get("tasks", [])
-        
-        print(f"📊 eod_summarizer received: {tasks}")
-        
-        # Count completed and incomplete
-        completed = [t for t in tasks if t.get("completed", False) is True]
-        incomplete = [t for t in tasks if not t.get("completed", False)]
-        
-        total = len(tasks)
-        completed_count = len(completed)
-        incomplete_count = len(incomplete)
-        
-        print(f"📊 Completed: {completed_count}, Incomplete: {incomplete_count}")
-        
-        # Generate summary based on ACTUAL data
-        if total == 0:
-            state["eod_summary"] = "No tasks were planned for today."
-            return state
-        
-        if completed_count == total and total > 0:
-            task_names = ", ".join([t.get('description', '') for t in completed])
-            state["eod_summary"] = f"🎉 AMAZING! You completed ALL {total} tasks today: {task_names}. You're on fire!"
-        
-        elif completed_count > 0 and incomplete_count > 0:
-            completed_names = ", ".join([t.get('description', '') for t in completed])
-            incomplete_names = ", ".join([t.get('description', '') for t in incomplete])
-            state["eod_summary"] = f"Today you completed {completed_count} out of {total} tasks. ✅ Done: {completed_names}. ⏳ Pending: {incomplete_names}. Tackle these tomorrow."
-        
-        elif completed_count == 0 and total > 0:
-            task_names = ", ".join([t.get('description', '') for t in tasks])
-            state["eod_summary"] = f"Today you had {total} tasks planned but completed none: {task_names}. Let's make a fresh start tomorrow!"
-        
-        else:
-            state["eod_summary"] = f"Today you completed {completed_count} of {total} tasks."
-        
-        return state
+def eod_summarizer(self, state: AgentState) -> AgentState:
+    """Generate EOD summary using Groq LLM"""
+    tasks = state.get("tasks", [])
+    completed = [t for t in tasks if t.get("completed", False)]
+    incomplete = [t for t in tasks if not t.get("completed", False)]
     
+    total = len(tasks)
+    completed_count = len(completed)
+    incomplete_count = len(incomplete)
+    
+    # Build prompt for LLM
+    prompt = f"""
+    Today's tasks:
+    - Total: {total}
+    - Completed: {completed_count}
+    - Incomplete: {incomplete_count}
+    
+    Completed tasks: {', '.join([t.get('description', '') for t in completed]) if completed else 'None'}
+    Incomplete tasks: {', '.join([t.get('description', '') for t in incomplete]) if incomplete else 'None'}
+    
+    Write a 1-paragraph EOD summary based on this data.
+    """
+    
+    try:
+        response = self.client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {"role": "system", "content": "You are a productivity coach. Write concise, honest, actionable daily summaries."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.3
+        )
+        state["eod_summary"] = response.choices[0].message.content
+    except Exception as e:
+        # Fallback to data-driven summary
+        if completed_count == total and total > 0:
+            state["eod_summary"] = f"🎉 You completed ALL {total} tasks today!"
+        elif completed_count > 0:
+            state["eod_summary"] = f"Today you completed {completed_count} of {total} tasks."
+        else:
+            state["eod_summary"] = f"Today you had {total} tasks planned but completed none."
+    
+    return state
+
+
     def plan_tomorrow(self, state: AgentState) -> AgentState:
         """Generate tomorrow's plan using ACTUAL data (NO LLM)"""
         
@@ -176,21 +181,9 @@ class ProductivityAgent:
         return state
     
     # ==================== RUN METHOD (FIXED) ====================
-    def run(self, user_id: str, input_state: dict) -> dict:
-        """Execute agent - FORCES fresh state each time"""
-        
-        # ✅ CRITICAL: Use timestamp to create fresh thread_id
-        # This prevents LangGraph from using cached state
-        fresh_thread_id = f"{user_id}_{int(time.time())}"
-        
-        config = {"configurable": {"thread_id": fresh_thread_id}}
-        input_state["user_id"] = user_id
-        
-        print(f"🔍 Running agent with thread_id: {fresh_thread_id}")
-        print(f"🔍 Input state tasks: {input_state.get('tasks', [])}")
-        
-        result = self.graph.invoke(input_state, config)
-        
-        print(f"🔍 Result summary: {result.get('eod_summary', 'No summary')}")
-        
-        return result
+def run(self, user_id: str, input_state: dict) -> dict:
+    """Execute agent - uses persistent memory"""
+    # ✅ FIX: Use consistent thread_id for each user
+    config = {"configurable": {"thread_id": user_id}}
+    input_state["user_id"] = user_id
+    return self.graph.invoke(input_state, config)
